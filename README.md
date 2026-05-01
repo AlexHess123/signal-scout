@@ -2,7 +2,7 @@
 
 Signal Scout is a real-time market intelligence system for prediction markets. It monitors high-signal trades from top traders, aggregates fragmented fills into coherent whale-position events, filters noise, sends alerts on unusual activity, and records everything needed to evaluate whether those alerts were actually right or wrong.
 
-This project was built as a decision-support system, not an auto-betting bot. The goal is to turn raw trade flow into structured, testable signals.
+This project was built as a decision-support system. The goal is to turn raw trade flow into structured, testable signals.
 
 ## What It Does
 
@@ -107,19 +107,3 @@ That makes the project a self-auditing intelligence system rather than a one-way
 - Historical alerts recorded before the `market_lookup_slug` fix are harder to resolve cleanly.
 - Evaluation quality depends on market data availability and enough time passing for markets to resolve.
 - The current report is strongest on post-fix records that include the correct lookup slug.
-
-## Contest Framing
-
-This project should be framed as:
-
-`A self-evaluating real-time intelligence system for prediction markets`
-
-Not as:
-
-- an auto-betting bot
-- a copy-trading tool
-- gambling automation
-
-## Short Pitch
-
-Signal Scout tracks high-conviction prediction-market activity in real time, filters out noise, alerts on whale signals, and keeps a durable evaluation trail so those alerts can be tested instead of blindly trusted.

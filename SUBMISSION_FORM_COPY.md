@@ -6,7 +6,7 @@ Signal Scout
 
 ## Tagline
 
-A self-evaluating real-time intelligence system for prediction markets
+Real-time market intelligence for prediction markets
 
 ## Short Description
 
