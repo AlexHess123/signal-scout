@@ -58,6 +58,15 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+def safe_text(value: object, *, max_length: int = 240) -> str:
+    text = str(value)
+    sanitized = "".join(char for char in text if char.isprintable() or char == " ")
+    sanitized = " ".join(sanitized.split())
+    if len(sanitized) > max_length:
+        return f"{sanitized[: max_length - 1]}..."
+    return sanitized
+
+
 def looks_like_market_slug(value: str) -> bool:
     candidate = value.strip()
     if not candidate:
@@ -529,14 +538,14 @@ class SignalEngine:
     ) -> str:
         implied_pct = round(event.price * 100)
         confidence_pct = max(1, min(99, round(signal_score / 15.0 * 100)))
-        trader_name = event.wallet_label or wallet_profile.label or event.wallet
+        trader_name = safe_text(event.wallet_label or wallet_profile.label or event.wallet, max_length=80)
         action_word = "bought" if event.side == "BUY" else "sold"
         fill_line = f"\nFills: {event.fill_count}" if event.fill_count > 1 else ""
         return (
-            f"{trader_name} {action_word} {event.outcome} at {implied_pct}%\n"
+            f"{trader_name} {action_word} {safe_text(event.outcome, max_length=40)} at {implied_pct}%\n"
             f"Bot likes it: {confidence_pct}%\n"
             f"Size: ${event.size_usd:,.0f}\n"
-            f"Market: {event.market_slug}{fill_line}"
+            f"Market: {safe_text(event.market_slug, max_length=160)}{fill_line}"
         )
 
 
@@ -638,11 +647,11 @@ def append_audit_record(
         "recorded_at": time.time(),
         "status": status,
         "wallet": event.wallet,
-        "wallet_label": event.wallet_label,
+        "wallet_label": safe_text(event.wallet_label, max_length=120),
         "market_id": event.market_id,
-        "market_slug": event.market_slug,
+        "market_slug": safe_text(event.market_slug, max_length=200),
         "market_lookup_slug": event.market_lookup_slug,
-        "outcome": event.outcome,
+        "outcome": safe_text(event.outcome, max_length=40),
         "side": event.side,
         "price": event.price,
         "size_usd": event.size_usd,
@@ -1007,7 +1016,7 @@ def fetch_user_trades(
     for item in payload if isinstance(payload, list) else []:
         transaction_hash = str(item.get("transactionHash", ""))
         condition_id = str(item.get("conditionId", ""))
-        title = str(item.get("title", "") or item.get("slug", ""))
+        title = safe_text(item.get("title", "") or item.get("slug", ""), max_length=200)
         market_slug = str(item.get("slug", "") or item.get("eventSlug", "") or title)
         raw_price = float(item.get("price", 0.0) or 0.0)
         price = raw_price / 100.0 if raw_price > 1 else raw_price
@@ -1021,14 +1030,14 @@ def fetch_user_trades(
                 market_id=condition_id,
                 market_slug=title,
                 market_lookup_slug=market_slug,
-                outcome=str(item.get("outcome", "")).upper(),
+                outcome=safe_text(str(item.get("outcome", "")).upper(), max_length=40),
                 side=str(item.get("side", "")).upper(),
                 price=price,
                 size_usd=size,
                 shares=size / max(price, 0.01),
                 wallet=wallet,
                 transaction_hash=transaction_hash,
-                wallet_label=str(item.get("name", "") or item.get("pseudonym", "")),
+                wallet_label=safe_text(item.get("name", "") or item.get("pseudonym", ""), max_length=120),
             )
         )
     trades.sort(key=lambda trade: trade.timestamp)
@@ -1274,12 +1283,12 @@ def run(
             evaluator.maybe_refresh(time.time())
         print(
             "seen | "
-            f"wallet={event.wallet_label or event.wallet} | "
-            f"side={event.side} {event.outcome} | "
+            f"wallet={safe_text(event.wallet_label or event.wallet, max_length=80)} | "
+            f"side={safe_text(event.side, max_length=12)} {safe_text(event.outcome, max_length=40)} | "
             f"price={event.price:.2f} | "
             f"size=${event.size_usd:,.0f} | "
             f"fills={event.fill_count} | "
-            f"market={event.market_slug}",
+            f"market={safe_text(event.market_slug, max_length=160)}",
             file=sys.stderr,
         )
         decision = engine.process(event)
@@ -1399,6 +1408,9 @@ def build_notifier(args: argparse.Namespace, ssl_context: ssl.SSLContext) -> Not
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.mode == "live" and args.allow_insecure_ssl:
+        print("--allow-insecure-ssl is not permitted in live mode", file=sys.stderr)
+        return 2
     ssl_context = build_ssl_context(args.allow_insecure_ssl)
 
     profiles = load_wallet_profiles(args.wallets_file)
