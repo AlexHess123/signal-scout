@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local analysis artifacts
+trade_audit.jsonl
+trade_audit.jsonl.tmp
+trade_audit_evaluations.jsonl
+trade_audit_evaluations.jsonl.tmp
+trade_audit_market_cache.json
+trade_audit_report.html
