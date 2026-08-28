@@ -44,8 +44,10 @@ HTTP_RETRIES = 3
 HTTP_RETRY_DELAY_SECONDS = 1.5
 MIN_ALERT_TRADE_SIZE_USD = 15000.0
 AGGREGATION_WINDOW_SECONDS = 60.0
-DEFAULT_AUDIT_LOG_PATH = Path(os.environ.get("AUDIT_LOG_PATH", "/data/trade_audit.jsonl"))
-DEFAULT_EVALUATION_LOG_PATH = Path(os.environ.get("EVALUATION_LOG_PATH", "/data/trade_audit_evaluations.jsonl"))
+DEFAULT_AUDIT_LOG_PATH = Path(os.environ.get("AUDIT_LOG_PATH", "trade_audit.jsonl"))
+DEFAULT_EVALUATION_LOG_PATH = Path(
+    os.environ.get("EVALUATION_LOG_PATH", "trade_audit_evaluations.jsonl")
+)
 FOLLOW_THROUGH_AGE_SECONDS = 2 * 3600.0
 FOLLOW_THROUGH_MOVE = 0.03
 EVALUATION_REFRESH_SECONDS = 900.0
@@ -1105,6 +1107,7 @@ def simulated_events() -> Iterator[TradeEvent]:
             timestamp=event_ts,
             market_id=market_id,
             market_slug=slug,
+            market_lookup_slug=market_id,
             outcome=outcome,
             side=side,
             price=next_price,
@@ -1133,6 +1136,7 @@ def simulated_events() -> Iterator[TradeEvent]:
             timestamp=event_ts,
             market_id=market_id,
             market_slug=slug,
+            market_lookup_slug=market_id,
             outcome=outcome,
             side=side,
             price=next_price,

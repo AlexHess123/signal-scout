@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile
+        run: python -m py_compile bot.py analyze_audit.py
+      - name: Run offline simulation
+        run: >-
+          python bot.py --mode simulate --notify-via stdout --max-events 10
+          --audit-log-path /tmp/signal-scout-audit.jsonl
+          --evaluation-log-path /tmp/signal-scout-evaluations.jsonl

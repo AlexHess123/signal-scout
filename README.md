@@ -1,8 +1,18 @@
 # Signal Scout
 
-Signal Scout is a real-time market intelligence system for prediction markets. It monitors high-signal trades from top traders, aggregates fragmented fills into coherent whale-position events, filters noise, sends alerts on unusual activity, and records everything needed to evaluate whether those alerts were actually right or wrong.
+**A self-evaluating market-intelligence pipeline for prediction markets.**
+
+![Signal Scout cover](assets/signal-scout-cover.svg)
+
+Signal Scout monitors public trade activity, aggregates fragmented fills into coherent
+position events, filters noise, sends selective alerts, and records the evidence needed to
+evaluate whether those alerts held up over time.
 
 This project was built as a decision-support system. The goal is to turn raw trade flow into structured, testable signals.
+
+> [!IMPORTANT]
+> Signal Scout is an educational research project, not financial advice or an automated
+> trading system. It does not place trades or manage funds.
 
 ## What It Does
 
@@ -45,20 +55,53 @@ Signal Scout has three layers:
    - persist server-side follow-through and resolved-outcome evaluations
    - generate an offline report for reviewing signal quality
 
-## Core Files
+```text
+Public market APIs
+       |
+       v
+Detect and aggregate fills
+       |
+       v
+Score and filter signals
+       |---------------------> Notification output
+       v
+Audit log and evaluation sidecar
+       |
+       v
+Offline HTML performance report
+```
 
-- [bot.py](/Users/alexhess/polymarket-bot/bot.py)
+## Repository Guide
+
+- [`bot.py`](bot.py)
   - live worker
   - scoring logic
   - aggregation
   - notifications
   - persistent audit/evaluation logging
 
-- [analyze_audit.py](/Users/alexhess/polymarket-bot/analyze_audit.py)
+- [`analyze_audit.py`](analyze_audit.py)
   - builds the HTML report from the audit log and evaluation sidecar
 
-- [fly.toml](/Users/alexhess/polymarket-bot/fly.toml)
+- [`fly.toml`](fly.toml)
   - Fly deployment configuration
+
+## Quick Start
+
+Signal Scout uses only the Python standard library.
+
+```bash
+git clone https://github.com/AlexHess123/signal-scout.git
+cd signal-scout
+python3 bot.py --mode simulate --notify-via stdout --max-events 10
+```
+
+The simulation mode generates synthetic trades and does not require credentials or network
+access. To inspect a newline-delimited event file instead:
+
+```bash
+python3 bot.py --mode jsonl --events-file events.jsonl --notify-via stdout
+```
 
 ## Deployment
 
@@ -68,6 +111,9 @@ Persistent files on the worker:
 
 - `/data/trade_audit.jsonl`
 - `/data/trade_audit_evaluations.jsonl`
+
+Notification credentials are supplied through runtime environment variables or command-line
+arguments. They are never required for simulation and must not be committed to Git.
 
 ## Alert Philosophy
 
@@ -107,3 +153,14 @@ That makes the project a self-auditing intelligence system rather than a one-way
 - Historical alerts recorded before the `market_lookup_slug` fix are harder to resolve cleanly.
 - Evaluation quality depends on market data availability and enough time passing for markets to resolve.
 - The current report is strongest on post-fix records that include the correct lookup slug.
+- Public API availability, schema changes, and rate limits can affect live collection.
+- A strong historical signal does not guarantee future performance.
+
+## Security and Privacy
+
+- No API keys or notification credentials are stored in the repository.
+- Generated audit logs and reports are excluded from Git.
+- Live mode refuses the insecure-SSL override.
+- Simulation is the recommended way to review the project safely.
+- Audit records can contain public wallet identifiers and market activity; generated records
+  should still be treated as operational data and reviewed before sharing.

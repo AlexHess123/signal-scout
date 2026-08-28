@@ -1,0 +1,82 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B1020"/>
+      <stop offset="0.55" stop-color="#121A33"/>
+      <stop offset="1" stop-color="#1B2544"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="237" y1="179" x2="1304" y2="746" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#58E6B2"/>
+      <stop offset="1" stop-color="#4FA3FF"/>
+    </linearGradient>
+    <filter id="blur" x="0" y="0" width="1600" height="900" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="60"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <g opacity="0.18" filter="url(#blur)">
+    <circle cx="286" cy="210" r="160" fill="#58E6B2"/>
+    <circle cx="1308" cy="184" r="170" fill="#4FA3FF"/>
+    <circle cx="1224" cy="718" r="220" fill="#7A5CFF"/>
+  </g>
+
+  <g opacity="0.18">
+    <path d="M120 760C290 620 435 671 575 532C700 408 819 420 950 313C1082 205 1255 221 1480 101" stroke="url(#accent)" stroke-width="5" stroke-linecap="round"/>
+    <path d="M120 710C270 600 405 613 531 503C669 382 815 402 930 310C1050 214 1219 252 1480 140" stroke="#DCE8FF" stroke-opacity="0.28" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="7 11"/>
+    <path d="M120 640C238 601 359 548 475 447C618 323 736 335 873 244C1021 146 1232 156 1480 74" stroke="#58E6B2" stroke-opacity="0.18" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <g opacity="0.1">
+    <rect x="119" y="116" width="1362" height="668" rx="28" stroke="#DCE8FF" stroke-width="2"/>
+    <path d="M280 116V784M441 116V784M602 116V784M763 116V784M924 116V784M1085 116V784M1246 116V784" stroke="#DCE8FF" stroke-opacity="0.15"/>
+    <path d="M119 250H1481M119 384H1481M119 518H1481M119 652H1481" stroke="#DCE8FF" stroke-opacity="0.15"/>
+  </g>
+
+  <rect x="123" y="120" width="1354" height="660" rx="24" fill="#0E1529" fill-opacity="0.55" stroke="#DCE8FF" stroke-opacity="0.14"/>
+
+  <rect x="180" y="188" width="214" height="38" rx="19" fill="#101A31" stroke="#DCE8FF" stroke-opacity="0.15"/>
+  <circle cx="211" cy="207" r="7" fill="#58E6B2"/>
+  <text x="232" y="214" fill="#DCE8FF" fill-opacity="0.9" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Prediction Market Intelligence</text>
+
+  <text x="176" y="344" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="96" font-weight="700">Signal Scout</text>
+  <text x="180" y="418" fill="#DCE8FF" fill-opacity="0.92" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="500">Real-time market intelligence for prediction markets</text>
+
+  <text x="180" y="506" fill="#DCE8FF" fill-opacity="0.82" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400">Tracks top traders, aggregates fragmented fills, scores whale signals,</text>
+  <text x="180" y="548" fill="#DCE8FF" fill-opacity="0.82" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400">and records outcomes so alerts can be reviewed and improved over time.</text>
+
+  <g transform="translate(180 634)">
+    <rect width="230" height="78" rx="18" fill="#0F1930" stroke="#58E6B2" stroke-opacity="0.35"/>
+    <text x="28" y="34" fill="#9ED8FF" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Alert Pipeline</text>
+    <text x="28" y="58" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">Live + Selective</text>
+  </g>
+
+  <g transform="translate(438 634)">
+    <rect width="230" height="78" rx="18" fill="#0F1930" stroke="#4FA3FF" stroke-opacity="0.35"/>
+    <text x="28" y="34" fill="#9ED8FF" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Evaluation</text>
+    <text x="28" y="58" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">Durable Audit Log</text>
+  </g>
+
+  <g transform="translate(696 634)">
+    <rect width="230" height="78" rx="18" fill="#0F1930" stroke="#7A5CFF" stroke-opacity="0.35"/>
+    <text x="28" y="34" fill="#9ED8FF" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Deployment</text>
+    <text x="28" y="58" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">Cloud Worker</text>
+  </g>
+
+  <g transform="translate(1045 225)">
+    <rect width="340" height="360" rx="26" fill="#0D172D" stroke="#DCE8FF" stroke-opacity="0.12"/>
+    <text x="34" y="62" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700">Example Alert</text>
+    <text x="34" y="116" fill="#DCE8FF" fill-opacity="0.86" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700">Wallet: sovereign2013</text>
+    <text x="34" y="158" fill="#DCE8FF" fill-opacity="0.8" font-family="Arial, Helvetica, sans-serif" font-size="21">Market: Spurs vs. Clippers: O/U 231.5</text>
+    <text x="34" y="198" fill="#DCE8FF" fill-opacity="0.8" font-family="Arial, Helvetica, sans-serif" font-size="21">Side: BUY OVER at 50%</text>
+    <text x="34" y="238" fill="#DCE8FF" fill-opacity="0.8" font-family="Arial, Helvetica, sans-serif" font-size="21">Size: $15,233</text>
+    <text x="34" y="278" fill="#DCE8FF" fill-opacity="0.8" font-family="Arial, Helvetica, sans-serif" font-size="21">Fills: 3</text>
+    <rect x="34" y="305" width="272" height="20" rx="10" fill="#182748"/>
+    <rect x="34" y="305" width="229" height="20" rx="10" fill="url(#accent)"/>
+    <text x="34" y="349" fill="#9ED8FF" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Confidence</text>
+    <text x="271" y="349" fill="white" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">84%</text>
+  </g>
+
+  <text x="1235" y="744" fill="#DCE8FF" fill-opacity="0.52" font-family="Arial, Helvetica, sans-serif" font-size="18" text-anchor="end">Built with Codex</text>
+</svg>
