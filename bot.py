@@ -18,19 +18,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import ssl
 import sys
 import time
 from collections import defaultdict, deque
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Deque, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
-
 
 MIN_ALERT_SCORE = 10.6
 STALE_SIGNAL_SECONDS = 600
@@ -62,7 +62,9 @@ def clamp(value: float, low: float, high: float) -> float:
 
 def safe_text(value: object, *, max_length: int = 240) -> str:
     text = str(value)
-    sanitized = "".join(char for char in text if char.isprintable() or char == " ")
+    sanitized = "".join(
+        " " if char.isspace() else char for char in text if char.isprintable() or char.isspace()
+    )
     sanitized = " ".join(sanitized.split())
     if len(sanitized) > max_length:
         return f"{sanitized[: max_length - 1]}..."
@@ -79,6 +81,21 @@ def looks_like_market_slug(value: str) -> bool:
     return all(char in allowed for char in candidate)
 
 
+def require_https_url(value: str, *, field_name: str = "URL") -> str:
+    """Return a normalized HTTPS URL or reject unsafe/malformed input."""
+
+    candidate = value.strip()
+    parsed = urlsplit(candidate)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(f"{field_name} must be an HTTPS URL without embedded credentials")
+    return candidate
+
+
 def audit_record_key_from_values(
     *,
     wallet: str,
@@ -91,14 +108,14 @@ def audit_record_key_from_values(
 ) -> str:
     if transaction_hash:
         return transaction_hash
-    return (
-        f"{wallet}:{market_id}:{outcome}:{side}:{event_timestamp:.3f}:{size_usd:.2f}"
-    )
+    return f"{wallet}:{market_id}:{outcome}:{side}:{event_timestamp:.3f}:{size_usd:.2f}"
 
 
 def build_ssl_context(allow_insecure_ssl: bool) -> ssl.SSLContext:
     if allow_insecure_ssl:
-        return ssl._create_unverified_context()
+        # This path exists only for local simulation/JSONL troubleshooting. main()
+        # rejects the option before live mode can construct this context.
+        return ssl._create_unverified_context()  # nosec B323
 
     cafile_candidates = [
         "/etc/ssl/cert.pem",
@@ -129,13 +146,28 @@ class TradeEvent:
     wallet_label: str = ""
     fill_count: int = 1
 
+    def __post_init__(self) -> None:
+        if self.side not in {"BUY", "SELL"}:
+            raise ValueError("side must be BUY or SELL")
+        if not 0.0 <= self.price <= 1.0 or not math.isfinite(self.price):
+            raise ValueError("price must be a finite value between 0 and 1")
+        if self.size_usd < 0.0 or not math.isfinite(self.size_usd):
+            raise ValueError("size_usd must be a finite nonnegative value")
+        if self.shares < 0.0 or not math.isfinite(self.shares):
+            raise ValueError("shares must be a finite nonnegative value")
+        if self.timestamp < 0.0 or not math.isfinite(self.timestamp):
+            raise ValueError("timestamp must be a finite nonnegative value")
+        if not all((self.market_id, self.market_slug, self.outcome, self.wallet)):
+            raise ValueError("market_id, market_slug, outcome, and wallet must not be empty")
+        if self.fill_count < 1:
+            raise ValueError("fill_count must be at least 1")
+
     @classmethod
-    def from_dict(cls, payload: dict) -> "TradeEvent":
+    def from_dict(cls, payload: dict) -> TradeEvent:
         required = {
             "timestamp",
             "market_id",
             "market_slug",
-            "market_lookup_slug",
             "outcome",
             "side",
             "price",
@@ -164,7 +196,7 @@ class TradeEvent:
         )
 
     @property
-    def market_key(self) -> Tuple[str, str]:
+    def market_key(self) -> tuple[str, str]:
         return (self.market_id, self.outcome)
 
     @property
@@ -201,16 +233,20 @@ class WalletProfile:
         hit_bonus = clamp((self.hit_rate - 0.5) * 4.0, -1.0, 2.0)
         conviction_bonus = clamp((self.conviction - 0.5) * 2.0, -0.5, 1.0)
         experience_bonus = clamp(self.observed_trades / 100.0, 0.0, 1.0)
-        return clamp(base + roi_bonus + hit_bonus + conviction_bonus + experience_bonus, 0.0, 10.0)
+        return clamp(
+            base + roi_bonus + hit_bonus + conviction_bonus + experience_bonus,
+            0.0,
+            10.0,
+        )
 
 
 @dataclass(slots=True)
 class SignalDecision:
     should_alert: bool
     score: float
-    reasons: List[str]
+    reasons: list[str]
     summary: str
-    context: Dict[str, float | int | str]
+    context: dict[str, float | int | str]
 
     @property
     def confidence_pct(self) -> int:
@@ -247,8 +283,12 @@ class LeaderboardTrader:
 
 @dataclass(slots=True)
 class MarketState:
-    prices: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=MARKET_HISTORY_SIZE))
-    recent_trades: Deque[TradeEvent] = field(default_factory=lambda: deque(maxlen=MARKET_HISTORY_SIZE))
+    prices: deque[tuple[float, float]] = field(
+        default_factory=lambda: deque(maxlen=MARKET_HISTORY_SIZE)
+    )
+    recent_trades: deque[TradeEvent] = field(
+        default_factory=lambda: deque(maxlen=MARKET_HISTORY_SIZE)
+    )
     last_alert_time: float = 0.0
     last_alert_score: float = 0.0
 
@@ -256,12 +296,12 @@ class MarketState:
         self.prices.append((event.timestamp, event.price))
         self.recent_trades.append(event)
 
-    def previous_price(self) -> Optional[float]:
+    def previous_price(self) -> float | None:
         if len(self.prices) < 2:
             return None
         return self.prices[-2][1]
 
-    def price_before(self, timestamp: float, seconds_back: float) -> Optional[float]:
+    def price_before(self, timestamp: float, seconds_back: float) -> float | None:
         cutoff = timestamp - seconds_back
         for ts, price in reversed(self.prices):
             if ts <= cutoff:
@@ -270,9 +310,9 @@ class MarketState:
 
 
 class WalletRegistry:
-    def __init__(self, profiles: Optional[Dict[str, WalletProfile]] = None) -> None:
-        self._profiles: Dict[str, WalletProfile] = profiles or {}
-        self._recent_activity: Dict[str, Deque[TradeEvent]] = defaultdict(
+    def __init__(self, profiles: dict[str, WalletProfile] | None = None) -> None:
+        self._profiles: dict[str, WalletProfile] = profiles or {}
+        self._recent_activity: dict[str, deque[TradeEvent]] = defaultdict(
             lambda: deque(maxlen=WALLET_HISTORY_SIZE)
         )
 
@@ -288,7 +328,7 @@ class WalletRegistry:
         profile = self.profile_for(event.wallet)
         profile.observed_trades += 1
 
-    def infer_intent(self, event: TradeEvent) -> Tuple[str, float]:
+    def infer_intent(self, event: TradeEvent) -> tuple[str, float]:
         recent = self._recent_activity[event.wallet]
         same_market = [trade for trade in recent if trade.market_key == event.market_key]
         if not same_market:
@@ -329,7 +369,7 @@ class SignalEngine:
         self.stale_after_seconds = stale_after_seconds
         self.cooldown_seconds = cooldown_seconds
         self.cluster_window_seconds = cluster_window_seconds
-        self.market_states: Dict[Tuple[str, str], MarketState] = defaultdict(MarketState)
+        self.market_states: dict[tuple[str, str], MarketState] = defaultdict(MarketState)
 
     def process(self, event: TradeEvent) -> SignalDecision:
         state = self.market_states[event.market_key]
@@ -372,7 +412,12 @@ class SignalEngine:
             event.side == "BUY"
             and intent in {"fresh_entry", "add_to_winner", "repeat_entry"}
             and event.size_usd >= MIN_ALERT_TRADE_SIZE_USD
-            and (wallet_profile.quality_score() >= 5.5 or abs(minute_move) >= 4.0 or event.price <= 0.20 or event.price >= 0.80)
+            and (
+                wallet_profile.quality_score() >= 5.5
+                or abs(minute_move) >= 4.0
+                or event.price <= 0.20
+                or event.price >= 0.80
+            )
         )
 
         should_alert = (
@@ -428,7 +473,7 @@ class SignalEngine:
             },
         )
 
-    def _cluster_metrics(self, state: MarketState, event: TradeEvent) -> Tuple[int, int, float]:
+    def _cluster_metrics(self, state: MarketState, event: TradeEvent) -> tuple[int, int, float]:
         cutoff = event.timestamp - self.cluster_window_seconds
         trades = [
             trade
@@ -452,8 +497,8 @@ class SignalEngine:
         cluster_size: float,
         intent: str,
         intent_confidence: float,
-    ) -> Tuple[float, List[str]]:
-        reasons: List[str] = []
+    ) -> tuple[float, list[str]]:
+        reasons: list[str] = []
         score = 0.0
 
         wallet_score = wallet_profile.quality_score() * 0.45
@@ -540,7 +585,9 @@ class SignalEngine:
     ) -> str:
         implied_pct = round(event.price * 100)
         confidence_pct = max(1, min(99, round(signal_score / 15.0 * 100)))
-        trader_name = safe_text(event.wallet_label or wallet_profile.label or event.wallet, max_length=80)
+        trader_name = safe_text(
+            event.wallet_label or wallet_profile.label or event.wallet, max_length=80
+        )
         action_word = "bought" if event.side == "BUY" else "sold"
         fill_line = f"\nFills: {event.fill_count}" if event.fill_count > 1 else ""
         return (
@@ -570,8 +617,14 @@ class StdoutNotifier(NotificationSink):
 
 
 class NtfyNotifier(NotificationSink):
-    def __init__(self, topic: str, ssl_context: ssl.SSLContext, base_url: str = "https://ntfy.sh") -> None:
-        self.url = f"{base_url.rstrip('/')}/{topic}"
+    def __init__(
+        self, topic: str, ssl_context: ssl.SSLContext, base_url: str = "https://ntfy.sh"
+    ) -> None:
+        normalized_base_url = require_https_url(base_url, field_name="ntfy URL")
+        normalized_topic = topic.strip()
+        if not normalized_topic:
+            raise ValueError("NTFY_TOPIC must not be empty")
+        self.url = f"{normalized_base_url.rstrip('/')}/{quote(normalized_topic, safe='')}"
         self.ssl_context = ssl_context
 
     def send(self, decision: SignalDecision) -> None:
@@ -586,7 +639,10 @@ class NtfyNotifier(NotificationSink):
             },
             method="POST",
         )
-        with urlopen(request, timeout=15, context=self.ssl_context):
+        # self.url is validated as HTTPS in __init__.
+        with urlopen(  # nosec B310
+            request, timeout=15, context=self.ssl_context
+        ):
             pass
 
 
@@ -612,7 +668,10 @@ class PushoverNotifier(NotificationSink):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
-        with urlopen(request, timeout=15, context=self.ssl_context):
+        # The destination is a fixed HTTPS Pushover endpoint.
+        with urlopen(  # nosec B310
+            request, timeout=15, context=self.ssl_context
+        ):
             pass
 
 
@@ -672,17 +731,25 @@ def append_audit_record(
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
-def load_wallet_profiles(path: Optional[Path]) -> Dict[str, WalletProfile]:
+def load_wallet_profiles(path: Path | None) -> dict[str, WalletProfile]:
     if path is None or not path.exists():
         return {
-            "0xalpha": WalletProfile("elite", quality=0.92, hit_rate=0.68, roi=24.0, conviction=0.84),
-            "0xbeta": WalletProfile("sharp", quality=0.84, hit_rate=0.63, roi=16.0, conviction=0.76),
-            "0xgamma": WalletProfile("solid", quality=0.72, hit_rate=0.58, roi=9.5, conviction=0.66),
-            "0xdelta": WalletProfile("watchlist", quality=0.60, hit_rate=0.54, roi=4.0, conviction=0.52),
+            "0xalpha": WalletProfile(
+                "elite", quality=0.92, hit_rate=0.68, roi=24.0, conviction=0.84
+            ),
+            "0xbeta": WalletProfile(
+                "sharp", quality=0.84, hit_rate=0.63, roi=16.0, conviction=0.76
+            ),
+            "0xgamma": WalletProfile(
+                "solid", quality=0.72, hit_rate=0.58, roi=9.5, conviction=0.66
+            ),
+            "0xdelta": WalletProfile(
+                "watchlist", quality=0.60, hit_rate=0.54, roi=4.0, conviction=0.52
+            ),
         }
 
-    raw = json.loads(path.read_text())
-    profiles: Dict[str, WalletProfile] = {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    profiles: dict[str, WalletProfile] = {}
     for wallet, payload in raw.items():
         profiles[wallet.lower()] = WalletProfile(
             label=str(payload.get("label", "tracked")),
@@ -697,17 +764,21 @@ def load_wallet_profiles(path: Optional[Path]) -> Dict[str, WalletProfile]:
 
 def http_json(
     url: str,
-    params: Optional[Dict[str, str | int | float]] = None,
+    params: dict[str, str | int | float] | None = None,
     *,
     ssl_context: ssl.SSLContext,
 ) -> object:
+    require_https_url(url)
     query = urlencode(params or {})
     full_url = url if not query else f"{url}?{query}"
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
     for attempt in range(HTTP_RETRIES):
         try:
             request = Request(full_url, headers={"User-Agent": "polymarket-signal-bot/1.0"})
-            with urlopen(request, timeout=20, context=ssl_context) as response:
+            # require_https_url rejects non-HTTPS URLs.
+            with urlopen(  # nosec B310
+                request, timeout=20, context=ssl_context
+            ) as response:
                 return json.loads(response.read().decode("utf-8"))
         except (HTTPError, URLError, TimeoutError) as exc:
             last_error = exc
@@ -718,7 +789,7 @@ def http_json(
     raise last_error
 
 
-def parse_jsonish_list(value: object) -> List[object]:
+def parse_jsonish_list(value: object) -> list[object]:
     if isinstance(value, list):
         return list(value)
     if isinstance(value, str):
@@ -731,7 +802,7 @@ def parse_jsonish_list(value: object) -> List[object]:
     return []
 
 
-def outcome_price_for_market(market: dict, outcome: str) -> Optional[float]:
+def outcome_price_for_market(market: dict, outcome: str) -> float | None:
     outcomes = [str(item).upper() for item in parse_jsonish_list(market.get("outcomes"))]
     prices = parse_jsonish_list(market.get("outcomePrices"))
     if not outcomes or len(outcomes) != len(prices):
@@ -746,14 +817,14 @@ def outcome_price_for_market(market: dict, outcome: str) -> Optional[float]:
         return None
 
 
-def resolved_outcome_for_market(market: dict) -> Optional[str]:
+def resolved_outcome_for_market(market: dict) -> str | None:
     if not bool(market.get("closed")):
         return None
     outcomes = parse_jsonish_list(market.get("outcomes"))
     prices = parse_jsonish_list(market.get("outcomePrices"))
     if not outcomes or len(outcomes) != len(prices):
         return None
-    numeric_prices: List[float] = []
+    numeric_prices: list[float] = []
     for value in prices:
         try:
             numeric_prices.append(float(value))
@@ -772,7 +843,7 @@ def fetch_gamma_market_by_slug(slug: str, *, ssl_context: ssl.SSLContext) -> dic
         ssl_context=ssl_context,
     )
     if not isinstance(payload, dict):
-        raise ValueError(f"unexpected gamma market payload for slug {slug}")
+        raise TypeError(f"unexpected gamma market payload for slug {slug}")
     return payload
 
 
@@ -831,7 +902,7 @@ class AuditEvaluator:
         if not self.audit_log_path.exists():
             return
 
-        candidates: List[dict] = []
+        candidates: list[dict] = []
         with self.audit_log_path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -843,15 +914,18 @@ class AuditEvaluator:
                     continue
                 if record.get("status") != "alert":
                     continue
-                record_key = str(record.get("record_key") or audit_record_key_from_values(
-                    wallet=str(record.get("wallet", "")),
-                    market_id=str(record.get("market_id", "")),
-                    outcome=str(record.get("outcome", "")),
-                    side=str(record.get("side", "")),
-                    event_timestamp=float(record.get("event_timestamp", 0.0) or 0.0),
-                    size_usd=float(record.get("size_usd", 0.0) or 0.0),
-                    transaction_hash=str(record.get("transaction_hash", "")),
-                ))
+                record_key = str(
+                    record.get("record_key")
+                    or audit_record_key_from_values(
+                        wallet=str(record.get("wallet", "")),
+                        market_id=str(record.get("market_id", "")),
+                        outcome=str(record.get("outcome", "")),
+                        side=str(record.get("side", "")),
+                        event_timestamp=float(record.get("event_timestamp", 0.0) or 0.0),
+                        size_usd=float(record.get("size_usd", 0.0) or 0.0),
+                        transaction_hash=str(record.get("transaction_hash", "")),
+                    )
+                )
                 recorded_at = float(record.get("recorded_at", 0.0) or 0.0)
                 if now - recorded_at < FOLLOW_THROUGH_AGE_SECONDS:
                     continue
@@ -866,7 +940,11 @@ class AuditEvaluator:
 
         candidates.sort(
             key=lambda item: (
-                0 if looks_like_market_slug(str(item.get("market_lookup_slug") or item.get("market_slug", ""))) else 1,
+                0
+                if looks_like_market_slug(
+                    str(item.get("market_lookup_slug") or item.get("market_slug", ""))
+                )
+                else 1,
                 float(item.get("recorded_at", 0.0)),
             )
         )
@@ -898,8 +976,11 @@ class AuditEvaluator:
                     continue
                 try:
                     market = fetch_gamma_market_by_slug(lookup_slug, ssl_context=self.ssl_context)
-                except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-                    print(f"audit evaluation skipped for slug {lookup_slug}: {exc}", file=sys.stderr)
+                except (HTTPError, URLError, TimeoutError, TypeError, ValueError) as exc:
+                    print(
+                        f"audit evaluation skipped for slug {lookup_slug}: {exc}",
+                        file=sys.stderr,
+                    )
                     continue
                 record_key = str(record["record_key"])
                 wrote = False
@@ -964,7 +1045,7 @@ def fetch_leaderboard_traders(
     order_by: str,
     limit: int,
     ssl_context: ssl.SSLContext,
-) -> List[LeaderboardTrader]:
+) -> list[LeaderboardTrader]:
     payload = http_json(
         f"{POLYMARKET_DATA_API}/v1/leaderboard",
         {
@@ -975,7 +1056,7 @@ def fetch_leaderboard_traders(
         },
         ssl_context=ssl_context,
     )
-    traders: List[LeaderboardTrader] = []
+    traders: list[LeaderboardTrader] = []
     for item in payload if isinstance(payload, list) else []:
         wallet = str(item.get("proxyWallet", "")).lower()
         if not wallet:
@@ -1004,7 +1085,7 @@ def fetch_user_trades(
     *,
     ssl_context: ssl.SSLContext,
     taker_only: bool,
-) -> List[TradeEvent]:
+) -> list[TradeEvent]:
     payload = http_json(
         f"{POLYMARKET_DATA_API}/trades",
         {
@@ -1014,7 +1095,7 @@ def fetch_user_trades(
         },
         ssl_context=ssl_context,
     )
-    trades: List[TradeEvent] = []
+    trades: list[TradeEvent] = []
     for item in payload if isinstance(payload, list) else []:
         transaction_hash = str(item.get("transactionHash", ""))
         condition_id = str(item.get("conditionId", ""))
@@ -1039,18 +1120,17 @@ def fetch_user_trades(
                 shares=size / max(price, 0.01),
                 wallet=wallet,
                 transaction_hash=transaction_hash,
-                wallet_label=safe_text(item.get("name", "") or item.get("pseudonym", ""), max_length=120),
+                wallet_label=safe_text(
+                    item.get("name", "") or item.get("pseudonym", ""), max_length=120
+                ),
             )
         )
     trades.sort(key=lambda trade: trade.timestamp)
     return trades
 
 
-def iter_jsonl_events(path: Optional[Path], follow: bool = False) -> Iterator[TradeEvent]:
-    if path is None:
-        handle = sys.stdin
-    else:
-        handle = path.open("r", encoding="utf-8")
+def iter_jsonl_events(path: Path | None, follow: bool = False) -> Iterator[TradeEvent]:
+    handle = sys.stdin if path is None else path.open("r", encoding="utf-8")
 
     try:
         while True:
@@ -1067,7 +1147,7 @@ def iter_jsonl_events(path: Optional[Path], follow: bool = False) -> Iterator[Tr
 
             try:
                 yield TradeEvent.from_dict(json.loads(stripped))
-            except Exception as exc:
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                 print(f"Skipping invalid event: {exc}", file=sys.stderr)
     finally:
         if path is not None:
@@ -1093,8 +1173,24 @@ def simulated_events() -> Iterator[TradeEvent]:
         ("0xalpha", "fed-june", "Will the Fed cut in June?", "YES", "BUY", 2400, 0.18),
         ("0xbeta", "fed-june", "Will the Fed cut in June?", "YES", "BUY", 3100, 0.19),
         ("0xgamma", "fed-june", "Will the Fed cut in June?", "YES", "BUY", 2200, 0.21),
-        ("0xnoise1", "btc-100k", "Will BTC hit 100k this year?", "YES", "BUY", 160, 0.64),
-        ("0xnoise2", "btc-100k", "Will BTC hit 100k this year?", "YES", "SELL", 210, 0.63),
+        (
+            "0xnoise1",
+            "btc-100k",
+            "Will BTC hit 100k this year?",
+            "YES",
+            "BUY",
+            160,
+            0.64,
+        ),
+        (
+            "0xnoise2",
+            "btc-100k",
+            "Will BTC hit 100k this year?",
+            "YES",
+            "SELL",
+            210,
+            0.63,
+        ),
         ("0xdelta", "election-2028", "Will candidate A win?", "YES", "BUY", 900, 0.43),
         ("0xalpha", "fed-june", "Will the Fed cut in June?", "YES", "SELL", 4200, 0.28),
     ]
@@ -1159,9 +1255,9 @@ def iter_live_trader_events(
     ssl_context: ssl.SSLContext,
     taker_only: bool,
 ) -> Iterator[TradeEvent]:
-    seen_trade_ids: Deque[str] = deque()
+    seen_trade_ids: deque[str] = deque()
     seen_lookup: set[str] = set()
-    tracked_wallets: List[str] = []
+    tracked_wallets: list[str] = []
     next_leaderboard_refresh = 0.0
 
     while True:
@@ -1223,7 +1319,7 @@ class AggregatedEvents:
     def __init__(self, events: Iterable[TradeEvent], window_seconds: float) -> None:
         self.events = iter(events)
         self.window_seconds = window_seconds
-        self.pending: Dict[Tuple[str, str, str, str], TradeEvent] = {}
+        self.pending: dict[tuple[str, str, str, str], TradeEvent] = {}
 
     def __iter__(self) -> Iterator[TradeEvent]:
         for event in self.events:
@@ -1245,7 +1341,8 @@ class AggregatedEvents:
 
     def _flush_expired(self, current_timestamp: float) -> Iterator[TradeEvent]:
         expired_keys = [
-            key for key, trade in self.pending.items()
+            key
+            for key, trade in self.pending.items()
             if current_timestamp - trade.timestamp > self.window_seconds
         ]
         for key in sorted(expired_keys, key=lambda item: self.pending[item].timestamp):
@@ -1280,7 +1377,7 @@ def run(
     print_all: bool,
     notifier: NotificationSink,
     audit_log_path: Path,
-    evaluator: Optional[AuditEvaluator],
+    evaluator: AuditEvaluator | None,
 ) -> None:
     for event in events:
         if evaluator is not None:
@@ -1302,7 +1399,10 @@ def run(
             notifier.send(decision)
         else:
             joined_reasons = "; ".join(decision.reasons)
-            print(f"ignored | {decision.summary} | reasons={joined_reasons}", file=sys.stderr)
+            print(
+                f"ignored | {decision.summary} | reasons={joined_reasons}",
+                file=sys.stderr,
+            )
             append_audit_record(audit_log_path, event=event, decision=decision, status="ignored")
         if print_all and not decision.should_alert:
             print(f"pass | {decision.summary}")
@@ -1349,12 +1449,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="stop after N events; 0 means no limit",
     )
-    parser.add_argument("--leaderboard-category", default="OVERALL", help="Polymarket leaderboard category")
-    parser.add_argument("--leaderboard-time-period", default="MONTH", help="DAY, WEEK, MONTH, or ALL")
+    parser.add_argument(
+        "--leaderboard-category",
+        default="OVERALL",
+        help="Polymarket leaderboard category",
+    )
+    parser.add_argument(
+        "--leaderboard-time-period", default="MONTH", help="DAY, WEEK, MONTH, or ALL"
+    )
     parser.add_argument("--leaderboard-order-by", default="PNL", help="PNL or VOL")
-    parser.add_argument("--leaderboard-limit", type=int, default=200, help="top N leaderboard traders to track")
-    parser.add_argument("--trades-per-wallet", type=int, default=25, help="recent trades fetched per wallet poll")
-    parser.add_argument("--poll-seconds", type=float, default=15.0, help="seconds between live polling cycles")
+    parser.add_argument(
+        "--leaderboard-limit",
+        type=int,
+        default=200,
+        help="top N leaderboard traders to track",
+    )
+    parser.add_argument(
+        "--trades-per-wallet",
+        type=int,
+        default=25,
+        help="recent trades fetched per wallet poll",
+    )
+    parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=15.0,
+        help="seconds between live polling cycles",
+    )
     parser.add_argument(
         "--taker-only",
         action="store_true",
@@ -1372,10 +1493,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="pushover",
         help="notification delivery method",
     )
-    parser.add_argument("--ntfy-topic", help="ntfy topic for phone pushes")
     parser.add_argument("--ntfy-url", default="https://ntfy.sh", help="base URL for ntfy")
-    parser.add_argument("--pushover-app-token", help="Pushover application token")
-    parser.add_argument("--pushover-user-key", help="Pushover user key")
     parser.add_argument(
         "--audit-log-path",
         type=Path,
@@ -1398,14 +1516,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_notifier(args: argparse.Namespace, ssl_context: ssl.SSLContext) -> NotificationSink:
     if args.notify_via == "ntfy":
-        if not args.ntfy_topic:
-            raise ValueError("--ntfy-topic is required when --notify-via ntfy")
-        return NtfyNotifier(topic=args.ntfy_topic, ssl_context=ssl_context, base_url=args.ntfy_url)
+        topic = os.environ.get("NTFY_TOPIC")
+        if not topic:
+            raise ValueError("NTFY_TOPIC is required when --notify-via ntfy")
+        return NtfyNotifier(topic=topic, ssl_context=ssl_context, base_url=args.ntfy_url)
     if args.notify_via == "pushover":
-        app_token = args.pushover_app_token or os.environ.get("PUSHOVER_APP_TOKEN")
-        user_key = args.pushover_user_key or os.environ.get("PUSHOVER_USER_KEY")
+        app_token = os.environ.get("PUSHOVER_APP_TOKEN")
+        user_key = os.environ.get("PUSHOVER_USER_KEY")
         if not app_token or not user_key:
-            raise ValueError("--pushover-app-token and --pushover-user-key are required for Pushover")
+            raise ValueError("PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required for Pushover")
         return PushoverNotifier(app_token, user_key, ssl_context=ssl_context)
     return StdoutNotifier()
 

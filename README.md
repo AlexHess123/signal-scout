@@ -112,8 +112,33 @@ Persistent files on the worker:
 - `/data/trade_audit.jsonl`
 - `/data/trade_audit_evaluations.jsonl`
 
-Notification credentials are supplied through runtime environment variables or command-line
-arguments. They are never required for simulation and must not be committed to Git.
+Notification credentials are supplied only through runtime environment variables. They are never
+required for simulation and must not be committed to Git or passed on the command line, where they
+could be exposed through shell history or the operating-system process list.
+
+- Pushover: `PUSHOVER_APP_TOKEN` and `PUSHOVER_USER_KEY`
+- ntfy: `NTFY_TOPIC`
+
+Custom ntfy servers must use an HTTPS URL supplied through `--ntfy-url`.
+
+## Validation
+
+The repository uses only the Python standard library at runtime. Development checks are pinned in
+`requirements-dev.txt`:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+ruff check .
+bandit -q -ll -r bot.py analyze_audit.py
+python3 -m unittest discover -s tests -v
+python3 bot.py --mode simulate --notify-via stdout --max-events 10
+```
+
+To build the local HTML evaluation report after generating an audit log:
+
+```bash
+python3 analyze_audit.py
+```
 
 ## Alert Philosophy
 
@@ -159,8 +184,10 @@ That makes the project a self-auditing intelligence system rather than a one-way
 ## Security and Privacy
 
 - No API keys or notification credentials are stored in the repository.
+- Notification credentials are environment-only and never accepted as command-line arguments.
 - Generated audit logs and reports are excluded from Git.
 - Live mode refuses the insecure-SSL override.
+- User-configurable endpoints must use HTTPS, and outbound requests have explicit time limits.
 - Simulation is the recommended way to review the project safely.
 - Audit records can contain public wallet identifiers and market activity; generated records
   should still be treated as operational data and reviewed before sharing.

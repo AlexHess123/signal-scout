@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .DS_Store
+.ruff_cache/
+.coverage
 
 # Local analysis artifacts
 trade_audit.jsonl

@@ -7,18 +7,17 @@ import json
 import subprocess
 import time
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from html import escape
 from pathlib import Path
-from typing import Iterable
-from urllib.parse import quote, urlencode
 from urllib.error import URLError
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-
-DEFAULT_INPUT = Path("/Users/alexhess/trade_audit.jsonl")
-DEFAULT_OUTPUT = Path("/Users/alexhess/trade_audit_report.html")
-DEFAULT_CACHE = Path("/Users/alexhess/trade_audit_market_cache.json")
-DEFAULT_EVALUATIONS = Path("/Users/alexhess/trade_audit_evaluations.jsonl")
+DEFAULT_INPUT = Path("trade_audit.jsonl")
+DEFAULT_OUTPUT = Path("trade_audit_report.html")
+DEFAULT_CACHE = Path("trade_audit_market_cache.json")
+DEFAULT_EVALUATIONS = Path("trade_audit_evaluations.jsonl")
 POLYMARKET_GAMMA_API = "https://gamma-api.polymarket.com"
 FOLLOW_THROUGH_HOURS = 2
 FOLLOW_THROUGH_MOVE = 0.03
@@ -92,22 +91,57 @@ def record_key(record: dict) -> str:
     )
 
 
+def require_https_url(value: str) -> str:
+    """Return a normalized HTTPS URL or reject unsafe/malformed input."""
+
+    candidate = value.strip()
+    parsed = urlsplit(candidate)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("URL must use HTTPS without embedded credentials")
+    return candidate
+
+
 def http_json(url: str, params: dict | None = None) -> object:
+    require_https_url(url)
     query = urlencode(params or {})
     full_url = url if not query else f"{url}?{query}"
     request = Request(full_url, headers={"User-Agent": "trade-audit-report/1.0"})
     try:
-        with urlopen(request, timeout=30) as response:
+        # require_https_url rejects non-HTTPS URLs.
+        with urlopen(  # nosec B310
+            request, timeout=30
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
     except URLError:
         # `curl` works more reliably than urllib on this host when local Python DNS/SSL
         # resolution is unstable. Fall back so report generation can still grade markets.
-        result = subprocess.run(
-            ["curl", "-fsSL", full_url],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                [
+                    "curl",
+                    "--proto",
+                    "=https",
+                    "--proto-redir",
+                    "=https",
+                    "--connect-timeout",
+                    "10",
+                    "--max-time",
+                    "30",
+                    "-fsSL",
+                    full_url,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=35,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise URLError("HTTPS request failed through urllib and curl") from exc
         return json.loads(result.stdout)
 
 
@@ -200,7 +234,9 @@ def infer_resolved_outcome(market: dict) -> str | None:
     return str(outcomes[winning_indexes[0]]).upper()
 
 
-def load_closed_market_resolution_map_by_slug(slugs: set[str]) -> tuple[dict[str, dict], str | None]:
+def load_closed_market_resolution_map_by_slug(
+    slugs: set[str],
+) -> tuple[dict[str, dict], str | None]:
     if not slugs:
         return {}, None
 
@@ -229,12 +265,24 @@ def load_closed_market_resolution_map_by_slug(slugs: set[str]) -> tuple[dict[str
             cache[slug] = resolved[slug]
     except URLError:
         if resolved:
-            return resolved, "Using cached resolved markets only. Could not refresh closed-market resolution data."
-        return {}, "Could not refresh closed-market resolution data. Final right/wrong grading is unavailable right now."
+            return (
+                resolved,
+                "Using cached resolved markets only. Could not refresh closed-market resolution data.",
+            )
+        return (
+            {},
+            "Could not refresh closed-market resolution data. Final right/wrong grading is unavailable right now.",
+        )
     except subprocess.CalledProcessError:
         if resolved:
-            return resolved, "Using cached resolved markets only. Could not refresh closed-market resolution data."
-        return {}, "Could not refresh closed-market resolution data. Final right/wrong grading is unavailable right now."
+            return (
+                resolved,
+                "Using cached resolved markets only. Could not refresh closed-market resolution data.",
+            )
+        return (
+            {},
+            "Could not refresh closed-market resolution data. Final right/wrong grading is unavailable right now.",
+        )
 
     if cache:
         save_cache(DEFAULT_CACHE, cache)
@@ -242,7 +290,10 @@ def load_closed_market_resolution_map_by_slug(slugs: set[str]) -> tuple[dict[str
     if missing:
         unresolved_count = len(slugs - set(resolved))
         if unresolved_count:
-            return resolved, f"Resolved grading is partial. Missing {unresolved_count:,} market resolutions from direct market lookups."
+            return (
+                resolved,
+                f"Resolved grading is partial. Missing {unresolved_count:,} market resolutions from direct market lookups.",
+            )
     return resolved, None
 
 
@@ -280,7 +331,10 @@ def classify_alert_follow_through(records: list[dict]) -> tuple[list[dict], str 
 
     market_map = load_active_market_map()
     if not market_map:
-        return [], "Could not refresh current Polymarket market prices. Follow-through grading is unavailable right now."
+        return (
+            [],
+            "Could not refresh current Polymarket market prices. Follow-through grading is unavailable right now.",
+        )
     graded: list[dict] = []
     for record in eligible_alerts:
         market = market_map.get(str(record.get("market_id", "")))
@@ -415,13 +469,15 @@ def svg_bar_chart(title: str, counts: dict[str, Counter]) -> str:
         <rect x="115" y="14" width="14" height="14" fill="#0f766e" />
         <text x="150" y="24" font-size="12" fill="#b45309">Ignored</text>
         <rect x="207" y="14" width="14" height="14" fill="#b45309" />
-        {''.join(bars)}
+        {"".join(bars)}
       </svg>
     </section>
     """
 
 
-def svg_stacked_chart(title: str, counts: dict[str, Counter], legend: tuple[str, ...] = GRADE_ORDER) -> str:
+def svg_stacked_chart(
+    title: str, counts: dict[str, Counter], legend: tuple[str, ...] = GRADE_ORDER
+) -> str:
     labels = list(counts.keys())
     max_value = max((sum(counter.values()) for counter in counts.values()), default=1)
     bar_group_width = 90
@@ -435,8 +491,12 @@ def svg_stacked_chart(title: str, counts: dict[str, Counter], legend: tuple[str,
     legend_x = 70
     for key in legend:
         color = GRADE_COLORS[key]
-        legend_parts.append(f'<text x="{legend_x}" y="24" font-size="12" fill="{color}">{escape(key.title())}</text>')
-        legend_parts.append(f'<rect x="{legend_x + 55}" y="14" width="14" height="14" fill="{color}" />')
+        legend_parts.append(
+            f'<text x="{legend_x}" y="24" font-size="12" fill="{color}">{escape(key.title())}</text>'
+        )
+        legend_parts.append(
+            f'<rect x="{legend_x + 55}" y="14" width="14" height="14" fill="{color}" />'
+        )
         legend_x += 105
 
     for index, label in enumerate(labels):
@@ -470,8 +530,8 @@ def svg_stacked_chart(title: str, counts: dict[str, Counter], legend: tuple[str,
       <h2>{escape(title)}</h2>
       <svg viewBox="0 0 {width} {height}" width="100%" height="{height}">
         <line x1="50" y1="{baseline}" x2="{width - 30}" y2="{baseline}" stroke="#666" />
-        {''.join(legend_parts)}
-        {''.join(bars)}
+        {"".join(legend_parts)}
+        {"".join(bars)}
       </svg>
     </section>
     """
@@ -507,7 +567,10 @@ def unavailable_table(message: str) -> str:
 def wallet_accuracy_table(counter: dict[str, Counter], limit: int = 15) -> str:
     ranked = sorted(
         counter.items(),
-        key=lambda item: (item[1].get("right", 0) + item[1].get("wrong", 0), item[1].get("right", 0)),
+        key=lambda item: (
+            item[1].get("right", 0) + item[1].get("wrong", 0),
+            item[1].get("right", 0),
+        ),
         reverse=True,
     )
     rows = []
@@ -537,9 +600,13 @@ def build_report(records: list[dict]) -> str:
     status_counts = Counter(record.get("status", "unknown") for record in records)
     confidence_buckets: dict[str, Counter] = defaultdict(Counter)
     size_buckets: dict[str, Counter] = defaultdict(Counter)
-    wallet_counts = Counter(record.get("wallet_label") or record.get("wallet", "unknown") for record in records)
+    wallet_counts = Counter(
+        record.get("wallet_label") or record.get("wallet", "unknown") for record in records
+    )
     resolved_alerts, resolved_error = classify_resolved_alerts(records)
-    resolved_counts = Counter(record.get("resolved_grade", "unresolved") for record in resolved_alerts)
+    resolved_counts = Counter(
+        record.get("resolved_grade", "unresolved") for record in resolved_alerts
+    )
     resolved_confidence_buckets: dict[str, Counter] = defaultdict(Counter)
     resolved_size_buckets: dict[str, Counter] = defaultdict(Counter)
     resolved_wallets: dict[str, Counter] = defaultdict(Counter)
@@ -600,8 +667,8 @@ def build_report(records: list[dict]) -> str:
     summary = f"""
     <section class="summary">
       <div class="metric"><span>Total records</span><strong>{len(records):,}</strong></div>
-      <div class="metric"><span>Alerts</span><strong>{status_counts['alert']:,}</strong></div>
-      <div class="metric"><span>Ignored</span><strong>{status_counts['ignored']:,}</strong></div>
+      <div class="metric"><span>Alerts</span><strong>{status_counts["alert"]:,}</strong></div>
+      <div class="metric"><span>Ignored</span><strong>{status_counts["ignored"]:,}</strong></div>
       <div class="metric"><span>Resolved alerts graded</span><strong>{sum(resolved_counts.values()):,}</strong></div>
       <div class="metric"><span>Graded alerts</span><strong>{sum(follow_through.values()):,}</strong></div>
     </section>
